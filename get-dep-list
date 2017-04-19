@@ -1,7 +1,7 @@
 #!/bin/sh
 # author polikuo
-# version 1.4.4
-# Mar 27 2017
+# version 1.4.5
+# April 19 2017
 
 . /etc/init.d/tc-functions
 useBusybox
@@ -227,6 +227,6 @@ SCAN="$APPEND""$DETECTED_TCZS"
 
 ( $S ) && chkrpt
 
-( $A ) && echo "$FOUNDED_LIST"
+( $A ) && [ -n "$FOUNDED_LIST" ] && echo "$FOUNDED_LIST"
 
 unset A APPEND B C COPY2FS D DELETE DETECTED_TCZS DIR EXT F FILE KERNELVER LDD_OUT LIBS LIST LO N NEWLINE NF NN NOTFOUND NOT_NEEDED R RPT RS S SCAN SELF TCEDIR TCZS option
