@@ -92,13 +92,11 @@ rscan() {
 }
 
 chkscripts() {
-  echo "checking for bash, php, python, perl ..."
-
-  if grep -qr "^\#\!"; then
-    grep -qr "^\#\!.*bash" && EXTRA="bash.tcz${NEWLINE}"
-    grep -qr "^\#\!.*php" && EXTRA="${EXTRA}php.tcz${NEWLINE}"
-    grep -qr "^\#\!.*python" && EXTRA="${EXTRA}python.tcz${NEWLINE}"
-    grep -qr "^\#\!.*perl" && EXTRA="${EXTRA}perl.tcz${NEWLINE}"
+  if grep -qr "^\#\!" .; then
+    grep -qr "^\#\!.*bash" . && EXTRA="bash.tcz${NEWLINE}"
+    grep -qr "^\#\!.*perl" . && EXTRA="${EXTRA}perl5.tcz${NEWLINE}"
+    grep -qr "^\#\!.*php" . && echo WARNING! php script detected
+    grep -qr "^\#\!.*python" . && echo WARNING! python script detected
   fi
 }
 
