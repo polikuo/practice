@@ -1,11 +1,11 @@
 #!/bin/sh
 # author polikuo
-# version 1.4.5
-# April 19 2017
+# version 1.4.6
+# July 6 2017
 
 . /etc/init.d/tc-functions
 useBusybox
-unset A APPEND B C COPY2FS D DB DELETE DETECTED_TCZS DIR EXT F FILE KERNELVER LDD_OUT LIBS LIST LO N NEWLINE NF NN NOTFOUND NOT_NEEDED option PROVIDES R RPT RS S SCAN SELF STILL_NOTFOUND TARGET TCEDIR TCZS
+unset A APPEND B C COPY2FS D DB DELETE DETECTED_TCZS DIR EXT EXTRA F FILE KERNELVER LDD_OUT LIBS LIST LO N NEWLINE NF NN NOTFOUND NOT_NEEDED option PROVIDES R RPT RS S SCAN SELF STILL_NOTFOUND TARGET TCEDIR TCZS
 
 showhelp() {
 ( $C ) && echo -n ${YELLOW} 1>&2
@@ -91,6 +91,17 @@ rscan() {
   '
 }
 
+chkscripts() {
+  echo "checking for bash, php, python, perl ..."
+
+  if grep -qr "^\#\!"; then
+    grep -qr "^\#\!.*bash" && EXTRA="bash.tcz${NEWLINE}"
+    grep -qr "^\#\!.*php" && EXTRA="${EXTRA}php.tcz${NEWLINE}"
+    grep -qr "^\#\!.*python" && EXTRA="${EXTRA}python.tcz${NEWLINE}"
+    grep -qr "^\#\!.*perl" && EXTRA="${EXTRA}perl.tcz${NEWLINE}"
+  fi
+}
+
 # Options
 A=false
 B=false
@@ -118,10 +129,8 @@ done
 shift $((OPTIND-1))
 
 # directory to scan
-DIR=false
 [ -n "$1" ] || showhelp
-cd $1 && DIR=true
-( $DIR ) || showhelp
+cd $1 || showhelp
 shift
 
 # additional custom extensions
@@ -135,9 +144,11 @@ KERNELVER="$(uname -r)"
     EXT=${EXT%.tcz}
     EXT=${EXT//KERNEL/$KERNELVER}
     EXT=${EXT}".tcz"
-    APPEND="$EXT""$NEWLINE""$APPEND"
+    APPEND="$EXT${NEWLINE}$APPEND"
   done
 }
+chkscripts
+APPEND="$APPEND""$EXTRA"
 
 # copy2fs
 COPY2FS=false
@@ -185,13 +196,13 @@ NOTFOUND="$(echo "$NOTFOUND" | cut -d = -f 1)"
   for TARGET in "$NOTFOUND"; do
     PROVIDES="$(awk 'BEGIN {FS="\n";RS=""} /\/'${TARGET}'\n/ || /\/'${TARGET}'$/ {print $1}' "$TCEDIR"/"$DB")"
     if [ "$(echo "$PROVIDES" | wc -l)" -eq 0 ]; then
-      STILL_NOTFOUND="$STILL_NOTFOUND""$NEWLINE""$TARGET"
+      STILL_NOTFOUND="$STILL_NOTFOUND${NEWLINE}$TARGET"
     fi
     if [ "$(echo "$PROVIDES" | wc -l)" -eq 1 ]; then
-      APPEND="$PROVIDES""$NEWLINE""$APPEND"
+      APPEND="$PROVIDES${NEWLINE}$APPEND"
     fi
     if [ "$(echo "$PROVIDES" | wc -l)" -gt 1 ]; then
-      FOUNDED_LIST="$FOUNDED_LIST""$NEWLINE""$TARGET found in: $PROVIDES"
+      FOUNDED_LIST="$FOUNDED_LIST${NEWLINE}$TARGET found in: $PROVIDES"
     fi
   done
 }
@@ -229,4 +240,4 @@ SCAN="$APPEND""$DETECTED_TCZS"
 
 ( $A ) && [ -n "$FOUNDED_LIST" ] && echo "$FOUNDED_LIST"
 
-unset A APPEND B C COPY2FS D DELETE DETECTED_TCZS DIR EXT F FILE KERNELVER LDD_OUT LIBS LIST LO N NEWLINE NF NN NOTFOUND NOT_NEEDED R RPT RS S SCAN SELF TCEDIR TCZS option
+unset A APPEND B C COPY2FS D DELETE DETECTED_TCZS DIR EXT EXTRA F FILE KERNELVER LDD_OUT LIBS LIST LO N NEWLINE NF NN NOTFOUND NOT_NEEDED R RPT RS S SCAN SELF TCEDIR TCZS option
