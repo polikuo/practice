@@ -1,241 +1,325 @@
 #!/bin/sh
 # author polikuo
-# version 1.4.6
-# July 6 2017
+# version 1.5
+# June 25 2018
 
 . /etc/init.d/tc-functions
 useBusybox
-unset A APPEND B C COPY2FS D DB DELETE DETECTED_TCZS DIR EXT EXTRA F FILE KERNELVER LDD_OUT LIBS LIST LO N NEWLINE NF NN NOTFOUND NOT_NEEDED option PROVIDES R RPT RS S SCAN SELF STILL_NOTFOUND TARGET TCEDIR TCZS
 
 showhelp() {
-( $C ) && echo -n ${YELLOW} 1>&2
-cat << END_HELP 1>&2
-Usage: $(basename $0) [-option] your_top_directory [append your list here ...]
-  Available Options (Default -ns)
-  -a auto check from provides.db
-  -c colorful output (same as -cns)
-  -d show only detected tczs, without custom extensions (cyan)
-  -f show full detected dependencies with ldd (white)
-  -h show this helpinfo (yellow)
-  -n show dependencies that are not found (red)
-  -r show recursively scanned tczs (full)
-  -s show detected tczs (short)
-END_HELP
-( $C ) && echo -n ${NORMAL} 1>&2
-exit 1
+  [ "$C" ] && echo -n ${YELLOW} 1>&2
+  local BN=$(basename $0)
+  echo "${BN}: A script that seeks dependencies in a given directory" 1>&2
+  echo "Usage: ${BN} [-option] directory [append your list here ...]
+  Available Options (default -ns)
+  -c     colorful output
+  -d     show only detected tczs, without custom extensions (cyan)
+  -h     show this helpinfo (yellow)
+  -n     show dependencies that are not found (red)
+  -p     scan provides.db for dependencies
+  -r     show recursively scanned tczs (full)
+  -s     show detected tczs (short)
+  -t DIR set tcedir to DIR (default /etc/sysconfig/tcedir)" 1>&2
+  [ "$C" ] && echo -n ${NORMAL} 1>&2
+  exit 1
+}
+
+copy2fs() {
+  local COPY2FS
+  [ "$C" ] && echo -n ${RED} 1>&2
+  if [ -f "${TCEDIR}/copy2fs.lst" ]; then
+    echo WARNING! copy2fs.lst found in ${TCEDIR}, please disable it and reboot 1>&2
+    COPY2FS="true"
+  fi
+  if [ -f "${TCEDIR}/copy2fs.flg" ]; then
+    echo WARNING! copy2fs.flg found in ${TCEDIR}, please disable it and reboot 1>&2
+    COPY2FS="true"
+  fi
+  [ "$C" ] && echo -n ${NORMAL} 1>&2
+  [ "$COPY2FS" ] && exit 1
+}
+
+# additional custom extensions
+extra() {
+  local EXT SHEBANG
+  if [ "$#" -ne 0 ]; then
+    for EXT in $@; do
+      EXT=${EXT##*/}
+      EXT=${EXT%.tcz}
+      EXT=${EXT//KERNEL/$KERNELVER}
+      APPEND="${APPEND}${EXT} "
+    done
+  fi
+  # check script
+  # shebang limit is set to 128, head -n1 is slow with binary files
+  SHEBANG=$(find -type f -exec head -c128 {} + 2> /dev/null | grep '^#!')
+  if [ "$SHEBANG" ]; then
+    case "$SHEBANG" in *bash* ) APPEND="${APPEND}bash " ;; esac
+    case "$SHEBANG" in *perl* ) APPEND="${APPEND}perl5 " ;; esac
+    case "$SHEBANG" in *php* ) echo WARNING! php script detected 1>&2 ;; esac
+    case "$SHEBANG" in *python* ) echo WARNING! python script detected 1>&2 ;; esac
+  fi
+}
+
+unique() {
+  local A BUFFER=' '
+  for A in "$@"; do
+    case "$BUFFER" in
+      *" ${A} "* ) :;;
+      * ) BUFFER="${BUFFER}${A} ";;
+    esac
+  done
+  echo "$BUFFER"
+}
+
+rm_matched_in_list() {
+  local B BUFFER="$1" REMOVE OUT=' '
+  shift
+  REMOVE=" $(echo $@) "
+  for B in $BUFFER; do
+    case "$REMOVE" in
+      *" ${B} "* ) :;;
+      * ) OUT="${OUT}${B} ";;
+    esac
+  done
+  echo "$OUT"
 }
 
 # check if TCZS existed
 chkexist() {
-  for FILE in $@
-  do
-    [ -s "$TCEDIR"/optional/"$FILE" ] || {
-      ( $C ) && echo -n ${MAGENTA}
-      echo $FILE not found or size is zero 1>&2
-      echo If you load it elsewhere, please move it and the dep file into your 1>&2
-      echo "$TCEDIR""/optional/" 1>&2
-      ( $C ) && echo -n ${NORMAL}
+  local FILE
+  for FILE in $@; do
+    # $KERNELVER already replaced
+    [ -s "${TCEDIR}/optional/${FILE}.tcz" ] || {
+      [ "$C" ] && echo -n ${MAGENTA}
+      echo "${FILE}.tcz not found or size is zero" 1>&2
+      echo "Please move it and the dep file into your" 1>&2
+      echo "${TCEDIR}/optional/" 1>&2
+      [ "$C" ] && echo -n ${NORMAL}
       exit 1
     }
   done
 }
 
-# check repeated
-chkrpt() {
-  for RPT in $TCZS
-  do
-    if [ -s "$TCEDIR"/optional/"$RPT".dep ]
-    then
-      for DELETE in $(cat "$TCEDIR"/optional/"$RPT".dep)
-      do
-        DELETE=${DELETE##*/}
-        DELETE=${DELETE%.tcz}
-        DELETE=${DELETE//KERNEL/$KERNELVER}
-        DELETE=${DELETE}".tcz"
-        if ( echo "$TCZS" | grep -q "$DELETE" )
-        then
-          NOT_NEEDED="$NOT_NEEDED"" $DELETE"
-        fi
+# check for redundant
+del_redundant() {
+  local LIST RPT REMOVE
+  # $KERNELVER already replaced
+  LIST=" $(echo $TCZS) "
+  for RPT in $TCZS; do
+    if [ -s "${TCEDIR}/optional/${RPT}.tcz.dep" ]; then
+      for REMOVE in $(cat "${TCEDIR}/optional/${RPT}.tcz.dep"); do
+        REMOVE=${REMOVE##*/}
+        REMOVE=${REMOVE%.tcz}
+        REMOVE=${REMOVE//KERNEL/$KERNELVER}
+        LIST="${LIST/ ${REMOVE} / }"
       done
     fi
   done
 
-  LIST="$TCZS"
-
-  for NN in $(echo $NOT_NEEDED | tr ' ' '\n' | sort -u)
-  do
-    LIST="$(echo "$LIST" | sed "/^$NN$/d")"
-  done
-
-  ( $C ) && echo -n ${CYAN}
-  echo "${LIST//$KERNELVER.tcz/KERNEL.tcz}"
-  ( $C ) && echo -n ${NORMAL}
+  [ "$C" ] && echo -n ${CYAN}
+  echo ${LIST//$KERNELVER/KERNEL} | tr ' ' '\n' | sort | sed 's:$:.tcz:g'
+  [ "$C" ] && echo -n ${NORMAL}
 }
 
 # recursively scan dependencies
 rscan() {
-  cd $TCEDIR/optional
-  echo -e "$@" | awk '
+  cd "${TCEDIR}/optional" || exit 1
+  echo $@ | awk -v KERNELVER="$KERNELVER" '
   function awk_scan(name, depfile, line) {
+    gsub(/ /, "", name)
     if (name) {
+      sub(/\.tcz/, "", name)
       sub(/KERNEL/, KERNELVER, name)
-      depfile=name".dep"
-      printf "%s\n", name
+      depfile = name ".tcz.dep"
+      print name
       while (getline line < depfile > 0)
         awk_scan(line)
       close(depfile)
     }
   }
-  BEGIN {KERNELVER="'"$KERNELVER"'"}
-  {awk_scan($1)}
-  '
+  {for(i=1;i<=NF;i++) awk_scan($i)}'
+  cd - &> /dev/null
 }
 
-chkscripts() {
-  if grep -qr "^\#\!" .; then
-    grep -qr "^\#\!.*bash" . && EXTRA="bash.tcz${NEWLINE}"
-    grep -qr "^\#\!.*perl" . && EXTRA="${EXTRA}perl5.tcz${NEWLINE}"
-    grep -qr "^\#\!.*php" . && echo WARNING! php script detected
-    grep -qr "^\#\!.*python" . && echo WARNING! python script detected
+scandir() {
+  # global DETECTED NOTFOUND
+  local FIND_EXEC LDD_OUT SELF LIBS S NF
+
+  FIND_EXEC=$(for A in $(find . -not -type d); do [ -x $A ] && echo $A; done)
+  LDD_OUT=$(ldd $FIND_EXEC 2> /dev/null)
+  SELF=$(echo "$FIND_EXEC" | sed 's:.::')
+  LIBS=$(
+    echo "$LDD_OUT" | awk '/=>/ && !/not found$/{U[$3]=1}
+    END{for (var in U) printf var " "}'
+  )
+  LIBS=$(rm_matched_in_list "$LIBS" $SELF)
+
+  DETECTED=$(realpath $LIBS 2> /dev/null | grep '^/tmp/tcloop/' | cut -d '/' -f 4)
+  DETECTED=$(unique $DETECTED)
+
+  if [ "$N" ]; then
+    SELF=$(echo "$FIND_EXEC" | sed 's:.*/::')
+    NF=$(
+      echo "$LDD_OUT" | awk '/not found$/{U[$1]=1}
+      END{for (var in U) printf var " "}'
+    )
+    NF=$(rm_matched_in_list "$NF " $SELF)
+    NOTFOUND=$(echo $NF | tr ' ' '\n')
   fi
+}
+
+searchDB() {
+  local NF=$NOTFOUND TARGET PROVIDES ADDED NOTDOWNLOADED CLUSTER NOWHERE
+  [ "$C" ] && echo -n ${RED}
+  for TARGET in $NF; do
+    PROVIDES=$(
+      awk 'BEGIN {FS="\n";RS=""}
+      /\/'${TARGET}'\n/ || /\/'${TARGET}'$/ {print $1}' "${TCEDIR}/${DB}"
+    )
+    if [ "$PROVIDES" ]; then
+      if [ $(echo "$PROVIDES" | wc -l) -eq 1 ]; then
+        if [ -s "${TCEDIR}/optional/${PROVIDES}" ]; then
+          APPEND="${APPEND}${PROVIDES} "
+          ADDED=$(
+            echo "$ADDED"
+            echo "${TARGET} provides ${PROVIDES}, list appended"
+          )
+          NOTFOUND=$(echo "$NOTFOUND" | grep -v "^${TARGET}$")
+        else
+          NOTDOWNLOADED=$(
+            echo "$NOTDOWNLOADED"
+            echo "${TARGET} can be found in: ${PROVIDES}"
+          )
+        fi
+      else
+        CLUSTER=$(
+          echo "$CLUSTER"
+          echo $TARGET can be found in: $PROVIDES
+        )
+      fi
+    else
+      NOWHERE=$(
+        echo "$NOWHERE"
+        echo "$TARGET"
+      )
+    fi
+  done
+  if [ "$ADDED" ]; then
+    echo "Note: These dependencies are detected in ${DB}:${ADDED}" 1>&2
+    echo '' 1>&2
+  fi
+  if [ "$N" ]; then
+    if [ "$NOWHERE" ]; then
+      echo "These dependencies can not be found anywhere:${NOWHERE}" 1>&2
+      echo '' 1>&2
+    fi
+    if [ "$NOTDOWNLOADED" ]; then
+      echo "These dependencies are not presented in ${TCEDIR}/optional" 1>&2
+      echo "Please download these extensions:${NOTDOWNLOADED}" 1>&2
+      echo '' 1>&2
+    fi
+    if [ "$CLUSTER" ]; then
+      echo "Found potential deps in ${DB}, but not proccessed:${CLUSTER}" 1>&2
+      echo '' 1>&2
+    fi
+  fi
+  [ "$C" ] && echo -n ${NORMAL}
 }
 
 # Options
-A=false
-B=false
-C=false
-D=false
-F=false
-N=false
-R=false
-S=false
-while getopts acdfhnrs option 2> /dev/null
+C=''
+D=''
+N=''
+P=''
+R=''
+S=''
+while getopts cdhnprst: option 2> /dev/null
 do
   case "$option" in
-    a ) A=true;;
-    c ) C=true;;
-    d ) D=true; B=true;;
-    f ) F=true; B=true;;
+    c ) C="true";;
+    d ) D="true";;
     h ) showhelp;;
-    n ) N=true; B=true;;
-    r ) R=true; B=true;;
-    s ) S=true; B=true;;
+    n ) N="true";;
+    p ) P="true";;
+    r ) R="true";;
+    s ) S="true";;
+    t ) TCEDIR=$(realpath $OPTARG) || echo "Using default directory" 1>&2;;
     * ) showhelp;;
   esac
 done
-( $B ) || { N=true;S=true; }
+[ "$N" ] || [ "$S" ] || [ "$D" ] || [ "$R" ] || N="true" S="true"
 shift $((OPTIND-1))
 
 # directory to scan
-[ -n "$1" ] || showhelp
-cd $1 || showhelp
+[ -d "$1" ] || ! echo "${1} is not a directory" 1>&2 || showhelp
+cd $1
 shift
 
-# additional custom extensions
-NEWLINE="
-"
-KERNELVER="$(uname -r)"
-[ "$#" -ne 0 ] && {
-  for EXT in $@
-  do
-    EXT=${EXT##*/}
-    EXT=${EXT%.tcz}
-    EXT=${EXT//KERNEL/$KERNELVER}
-    EXT=${EXT}".tcz"
-    APPEND="$EXT${NEWLINE}$APPEND"
-  done
-}
-chkscripts
-APPEND="$APPEND""$EXTRA"
-
-# copy2fs
-COPY2FS=false
-TCEDIR="$(realpath /etc/sysconfig/tcedir)"
-[ -f $TCEDIR/copy2fs.lst ] && {
-  ( $C ) && echo -n ${RED} 1>&2
-  echo WARNING! copy2fs.lst found in $TCEDIR, please disable it and reboot 1>&2
-  ( $C ) && echo -n ${NORMAL} 1>&2
-  COPY2FS=true
-}
-[ -f $TCEDIR/copy2fs.flg ] && {
-  ( $C ) && echo -n ${RED} 1>&2
-  echo WARNING! copy2fs.flg found in $TCEDIR, please disable it and reboot 1>&2
-  ( $C ) && echo -n ${NORMAL} 1>&2
-  COPY2FS=true
-}
-( $COPY2FS ) && exit 1
-
 # main
-LDD_OUT="$(find . -not -type d -exec ldd {} + 2> /dev/null)"
-LO="$(echo "$LDD_OUT" | cut -d '(' -f 1 | tr -d '[[:blank:]]')"
-SELF="$(find . -not -type d -exec sh -c 'basename "$1"' _ {} \;)"
-LIBS="$(echo "$LO" | grep '/' | cut -d '>' -f 2 | sort -u)"
-( $N ) && NOTFOUND="$(echo "$LO" | grep "notfound$" | sort -u)"
+[ "$TCEDIR" ] || TCEDIR=$(realpath /etc/sysconfig/tcedir)
+readonly TCEDIR
+[ -d "$TCEDIR" ] || ! echo "${TCEDIR} is not a directory" 1>&2 || exit 1
+copy2fs
 
-for REMOVE in $SELF
-do
-  ( $D ) || ( $R ) || ( $S ) && LIBS="$(echo "$LIBS" | grep -v "/$REMOVE$")"
-  ( $N ) && NOTFOUND="$(echo "$NOTFOUND" | grep -v "^$REMOVE=>notfound$")"
-done
-NOTFOUND="$(echo "$NOTFOUND" | cut -d = -f 1)"
+readonly KERNELVER=$(uname -r)
+APPEND=' '
+extra $@
 
-( $A ) && {
-  DB="provides.db"
+DETECTED=''
+NOTFOUND=''
+scandir
+
+if [ "$P" ]; then
+  readonly DB="provides.db"
   getMirror
   cd "$TCEDIR"
-  if zsync -i "$TCEDIR"/"$DB" -q "$MIRROR"/"$DB".zsync
+  if zsync -i "${TCEDIR}/${DB}" -q "${MIRROR}/${DB}.zsync"
   then
-    rm -f "$DB".zs-old
+    rm -f "${DB}.zs-old"
   else
-    wget -O "$TCEDIR"/"$DB" "$MIRROR"/"$DB"
+    wget -O "${TCEDIR}/${DB}" "${MIRROR}/${DB}" &> /dev/null
   fi
-  cd - > /dev/null
+  cd - &> /dev/null
+  searchDB
+fi
 
-  for TARGET in "$NOTFOUND"; do
-    PROVIDES="$(awk 'BEGIN {FS="\n";RS=""} /\/'${TARGET}'\n/ || /\/'${TARGET}'$/ {print $1}' "$TCEDIR"/"$DB")"
-    if [ "$(echo "$PROVIDES" | wc -l)" -eq 0 ]; then
-      STILL_NOTFOUND="$STILL_NOTFOUND${NEWLINE}$TARGET"
-    fi
-    if [ "$(echo "$PROVIDES" | wc -l)" -eq 1 ]; then
-      APPEND="$PROVIDES${NEWLINE}$APPEND"
-    fi
-    if [ "$(echo "$PROVIDES" | wc -l)" -gt 1 ]; then
-      FOUNDED_LIST="$FOUNDED_LIST${NEWLINE}$TARGET found in: $PROVIDES"
-    fi
-  done
-}
+SCAN="${APPEND}${DETECTED}"
 
-DETECTED_TCZS="$(realpath $LIBS 2> /dev/null | grep '^/tmp/tcloop/' | cut -d '/' -f 4 | sort -u | sed 's/$/\.tcz/g')"
-SCAN="$APPEND""$DETECTED_TCZS"
-( $R ) || ( $S ) && { TCZS="$(for RS in $SCAN; do rscan $RS;done | sort -u)";chkexist "$TCZS"; }
+if [ "$R" ] || [ "$S" ]; then
+  if [ "$(echo $SCAN)" ]; then
+    TCZS=$(rscan $SCAN)
+    TCZS=$(unique $TCZS)
+    chkexist $TCZS
+  else
+    TCZS=''
+  fi
+fi
 
 # output
-( $D ) && {
-  chkexist "$DETECTED_TCZS"
-  ( $C ) && echo -n ${CYAN}
-  echo "${DETECTED_TCZS//$KERNELVER.tcz/KERNEL.tcz}"
-  ( $C ) && echo -n ${NORMAL}
-}
+if [ "$D" ]; then
+  chkexist $DETECTED
+  [ "$C" ] && echo -n ${BLUE}
+  echo ${DETECTED//$KERNELVER/KERNEL} | tr ' ' '\n' | sort | sed 's:$:.tcz:g'
+  [ "$N" ] && [ "$NOTFOUND" ] || [ "$R" ] || [ "$S" ] && echo ''
+  [ "$C" ] && echo -n ${NORMAL}
+fi
 
-( $F ) && {
-  echo "$LDD_OUT"
-}
-
-( $N ) && [ -n "$NOTFOUND" ] && {
-  ( $C ) && echo -n ${RED} 1>&2
-  echo These dependencies are missing 1>&2
+if [ "$N" ] && [ "$NOTFOUND" ]; then
+  [ "$C" ] && echo -n ${RED} 1>&2
+  echo 'Missing dependencies:' 1>&2
   echo "$NOTFOUND" 1>&2
-  ( $C ) && echo -n ${NORMAL} 1>&2
-}
+  [ "$R" ] || [ "$S" ] && echo '' 1>&2
+  [ "$C" ] && echo -n ${NORMAL} 1>&2
+fi
 
-( $R ) && {
-  ( $C ) && echo -n ${GREEN}
-  echo "${TCZS//$KERNELVER.tcz/KERNEL.tcz}"
-  ( $C ) && echo -n ${NORMAL}
-}
+if [ "$R" ]; then
+  [ "$C" ] && echo -n ${GREEN}
+  echo ${TCZS//$KERNELVER/KERNEL} | tr ' ' '\n' | sort | sed 's:$:.tcz:g'
+  [ "$S" ] && echo ''
+  [ "$C" ] && echo -n ${NORMAL}
+fi
 
-( $S ) && chkrpt
+[ "$S" ] && del_redundant
 
-( $A ) && [ -n "$FOUNDED_LIST" ] && echo "$FOUNDED_LIST"
-
-unset A APPEND B C COPY2FS D DELETE DETECTED_TCZS DIR EXT EXTRA F FILE KERNELVER LDD_OUT LIBS LIST LO N NEWLINE NF NN NOTFOUND NOT_NEEDED R RPT RS S SCAN SELF TCEDIR TCZS option
+exit 0
