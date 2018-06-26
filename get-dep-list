@@ -1,6 +1,6 @@
 #!/bin/sh
 # author polikuo
-# version 1.5
+# version 1.6
 # June 25 2018
 
 . /etc/init.d/tc-functions
@@ -13,12 +13,13 @@ showhelp() {
   echo "Usage: ${BN} [-option] directory [append your list here ...]
   Available Options (default -ns)
   -c     colorful output
-  -d     show only detected tczs, without custom extensions (cyan)
+  -d     show only detected tczs, without custom extensions (blue)
+  -g     graph .tcz.tree ([-s] required, yellow)
   -h     show this helpinfo (yellow)
   -n     show dependencies that are not found (red)
-  -p     scan provides.db for dependencies
-  -r     show recursively scanned tczs (full)
-  -s     show detected tczs (short)
+  -p     scan provides.db for dependencies (warnings in red)
+  -r     show recursively scanned tczs (full, green)
+  -s     show detected tczs (short, cyan)
   -t DIR set tcedir to DIR (default /etc/sysconfig/tcedir)" 1>&2
   [ "$C" ] && echo -n ${NORMAL} 1>&2
   exit 1
@@ -42,14 +43,12 @@ copy2fs() {
 # additional custom extensions
 extra() {
   local EXT SHEBANG
-  if [ "$#" -ne 0 ]; then
-    for EXT in $@; do
-      EXT=${EXT##*/}
-      EXT=${EXT%.tcz}
-      EXT=${EXT//KERNEL/$KERNELVER}
-      APPEND="${APPEND}${EXT} "
-    done
-  fi
+  for EXT in $@; do
+    EXT=${EXT##*/}
+    EXT=${EXT%.tcz}
+    EXT=${EXT//KERNEL/$KERNELVER}
+    APPEND="${APPEND}${EXT} "
+  done
   # check script
   # shebang limit is set to 128, head -n1 is slow with binary files
   SHEBANG=$(find -type f -exec head -c128 {} + 2> /dev/null | grep '^#!')
@@ -103,7 +102,7 @@ chkexist() {
 
 # check for redundant
 del_redundant() {
-  local LIST RPT REMOVE
+  local LIST RPT REMOVE GRAPH
   # $KERNELVER already replaced
   LIST=" $(echo $TCZS) "
   for RPT in $TCZS; do
@@ -116,9 +115,12 @@ del_redundant() {
       done
     fi
   done
-
+  LIST=$(echo ${LIST//$KERNELVER/KERNEL} | tr ' ' '\n' | sort)
   [ "$C" ] && echo -n ${CYAN}
-  echo ${LIST//$KERNELVER/KERNEL} | tr ' ' '\n' | sort | sed 's:$:.tcz:g'
+  echo "$LIST" | sed 's:$:.tcz:g'
+  [ "$C" ] && echo ${YELLOW}
+  # use for loop to prevent early quitting in awk
+  [ "$G" ] && for GRAPH in $LIST; do graph $GRAPH; done
   [ "$C" ] && echo -n ${NORMAL}
 }
 
@@ -227,25 +229,56 @@ searchDB() {
   [ "$C" ] && echo -n ${NORMAL}
 }
 
+graph() {
+  cd "${TCEDIR}/optional"
+  echo $1 | awk -v KERNELVER="$KERNELVER" '
+  BEGIN{layer = 0}
+  function dep_tree(name, depfile, line) {
+    depfile = name ".tcz.dep"
+    layer += 1
+    while(getline line < depfile > 0) {
+      gsub(/ /, "", line)
+      sub(/\.tcz$/, "", line)
+      sub(/KERNEL/, KERNELVER, line)
+      if(line) {
+        for(i=0;i<layer;i++) printf "   "
+        print line ".tcz"
+        dep_tree(line)
+      }
+    }
+    close(depfile)
+    layer -= 1
+  }
+  {
+    sub(/KERNEL/, KERNELVER)
+    print $0 ".tcz"
+    layer = 0
+    dep_tree($0)
+  }'
+  cd - &> /dev/null
+}
+
 # Options
 C=''
 D=''
+G=''
 N=''
 P=''
 R=''
 S=''
-while getopts cdhnprst: option 2> /dev/null
+while getopts cdghnprst: option 2> /dev/null
 do
   case "$option" in
     c ) C="true";;
     d ) D="true";;
+    g ) G="true";;
     h ) showhelp;;
     n ) N="true";;
     p ) P="true";;
     r ) R="true";;
     s ) S="true";;
     t ) TCEDIR=$(realpath $OPTARG) || echo "Using default directory" 1>&2;;
-    * ) showhelp;;
+    * ) echo "Invalid options"; showhelp;;
   esac
 done
 [ "$N" ] || [ "$S" ] || [ "$D" ] || [ "$R" ] || N="true" S="true"
@@ -297,7 +330,7 @@ if [ "$R" ] || [ "$S" ]; then
 fi
 
 # output
-if [ "$D" ]; then
+if [ "$D" ] && [ "$(echo $DETECTED)" ]; then
   chkexist $DETECTED
   [ "$C" ] && echo -n ${BLUE}
   echo ${DETECTED//$KERNELVER/KERNEL} | tr ' ' '\n' | sort | sed 's:$:.tcz:g'
@@ -305,7 +338,7 @@ if [ "$D" ]; then
   [ "$C" ] && echo -n ${NORMAL}
 fi
 
-if [ "$N" ] && [ "$NOTFOUND" ]; then
+if [ "$N" ] && [ "$(echo $NOTFOUND)" ]; then
   [ "$C" ] && echo -n ${RED} 1>&2
   echo 'Missing dependencies:' 1>&2
   echo "$NOTFOUND" 1>&2
@@ -313,13 +346,13 @@ if [ "$N" ] && [ "$NOTFOUND" ]; then
   [ "$C" ] && echo -n ${NORMAL} 1>&2
 fi
 
-if [ "$R" ]; then
+if [ "$R" ] && [ "$(echo $TCZS)" ]; then
   [ "$C" ] && echo -n ${GREEN}
   echo ${TCZS//$KERNELVER/KERNEL} | tr ' ' '\n' | sort | sed 's:$:.tcz:g'
   [ "$S" ] && echo ''
   [ "$C" ] && echo -n ${NORMAL}
 fi
 
-[ "$S" ] && del_redundant
+[ "$S" ] && [ "$(echo $TCZS)" ] && del_redundant
 
 exit 0
