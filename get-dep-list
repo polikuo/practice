@@ -1,7 +1,7 @@
 #!/bin/sh
 # author polikuo
-# version 1.6
-# June 25 2018
+# version 1.7
+# June 27 2018
 
 . /etc/init.d/tc-functions
 useBusybox
@@ -10,17 +10,17 @@ showhelp() {
   [ "$C" ] && echo -n ${YELLOW} 1>&2
   local BN=$(basename $0)
   echo "${BN}: A script that seeks dependencies in a given directory" 1>&2
-  echo "Usage: ${BN} [-option] directory [append your list here ...]
-  Available Options (default -ns)
+  echo "Usage: ${BN} [-option] directory [append your list here ...]" 1>&2
+  echo 'Available Options (default -ns)
   -c     colorful output
-  -d     show only detected tczs, without custom extensions (blue)
-  -g     graph .tcz.tree ([-s] required, yellow)
+  -d     show only the detected tczs, without custom extensions (blue)
+  -g     graph .tcz.tree (magenta)
   -h     show this helpinfo (yellow)
-  -n     show dependencies that are not found (red)
-  -p     scan provides.db for dependencies (warnings in red)
-  -r     show recursively scanned tczs (full, green)
-  -s     show detected tczs (short, cyan)
-  -t DIR set tcedir to DIR (default /etc/sysconfig/tcedir)" 1>&2
+  -n     show dependencies that can not be found (red)
+  -p     scan provides.db for dependencies
+  -r     show recursively scanned tczs (green)
+  -s     show shortened tczs (cyan)
+  -t DIR set tcedir to DIR (default /etc/sysconfig/tcedir)' 1>&2
   [ "$C" ] && echo -n ${NORMAL} 1>&2
   exit 1
 }
@@ -29,11 +29,13 @@ copy2fs() {
   local COPY2FS
   [ "$C" ] && echo -n ${RED} 1>&2
   if [ -f "${TCEDIR}/copy2fs.lst" ]; then
-    echo WARNING! copy2fs.lst found in ${TCEDIR}, please disable it and reboot 1>&2
+    echo -n "WARNING! copy2fs.lst found in ${TCEDIR}" 1>&2
+    echo ", please disable it and reboot" 1>&2
     COPY2FS="true"
   fi
   if [ -f "${TCEDIR}/copy2fs.flg" ]; then
-    echo WARNING! copy2fs.flg found in ${TCEDIR}, please disable it and reboot 1>&2
+    echo -n "WARNING! copy2fs.flg found in ${TCEDIR}" 1>&2
+    echo ", please disable it and reboot" 1>&2
     COPY2FS="true"
   fi
   [ "$C" ] && echo -n ${NORMAL} 1>&2
@@ -55,8 +57,12 @@ extra() {
   if [ "$SHEBANG" ]; then
     case "$SHEBANG" in *bash* ) APPEND="${APPEND}bash " ;; esac
     case "$SHEBANG" in *perl* ) APPEND="${APPEND}perl5 " ;; esac
-    case "$SHEBANG" in *php* ) echo WARNING! php script detected 1>&2 ;; esac
-    case "$SHEBANG" in *python* ) echo WARNING! python script detected 1>&2 ;; esac
+    case "$SHEBANG" in
+      *php* ) echo "${RED}WARNING! php script detected${NORMAL}" 1>&2 ;;
+    esac
+    case "$SHEBANG" in
+      *python* ) echo "${RED}WARNING! python script detected${NORMAL}" 1>&2 ;;
+    esac
   fi
 }
 
@@ -86,18 +92,21 @@ rm_matched_in_list() {
 
 # check if TCZS existed
 chkexist() {
-  local FILE
+  local FILE QUIT
+  [ "$C" ] && echo -n ${RED}
   for FILE in $@; do
     # $KERNELVER already replaced
     [ -s "${TCEDIR}/optional/${FILE}.tcz" ] || {
-      [ "$C" ] && echo -n ${MAGENTA}
       echo "${FILE}.tcz not found or size is zero" 1>&2
-      echo "Please move it and the dep file into your" 1>&2
-      echo "${TCEDIR}/optional/" 1>&2
-      [ "$C" ] && echo -n ${NORMAL}
-      exit 1
+      QUIT="1"
     }
   done
+  if [ "$QUIT" ]; then
+    echo "Please move the tczs and the dep files into your" 1>&2
+    echo "${TCEDIR}/optional/${NORMAL}" 1>&2
+    exit 1
+  fi
+  [ "$C" ] && echo -n ${NORMAL}
 }
 
 # check for redundant
@@ -117,10 +126,15 @@ del_redundant() {
   done
   LIST=$(echo ${LIST//$KERNELVER/KERNEL} | tr ' ' '\n' | sort)
   [ "$C" ] && echo -n ${CYAN}
-  echo "$LIST" | sed 's:$:.tcz:g'
-  [ "$C" ] && echo ${YELLOW}
-  # use for loop to prevent early quitting in awk
-  [ "$G" ] && for GRAPH in $LIST; do graph $GRAPH; done
+  [ "$S" ] && echo "$LIST" | sed 's:$:.tcz:g'
+  [ "$S" ] && [ "$G" ] && echo ''
+  if [ "$G" ]; then
+    [ "$C" ] && echo -n ${MAGENTA}
+    # use for loop to prevent early quitting in awk
+    for GRAPH in $LIST; do
+      graph $GRAPH
+    done
+  fi
   [ "$C" ] && echo -n ${NORMAL}
 }
 
@@ -173,7 +187,6 @@ scandir() {
 
 searchDB() {
   local NF=$NOTFOUND TARGET PROVIDES ADDED NOTDOWNLOADED CLUSTER NOWHERE
-  [ "$C" ] && echo -n ${RED}
   for TARGET in $NF; do
     PROVIDES=$(
       awk 'BEGIN {FS="\n";RS=""}
@@ -185,7 +198,7 @@ searchDB() {
           APPEND="${APPEND}${PROVIDES} "
           ADDED=$(
             echo "$ADDED"
-            echo "${TARGET} provides ${PROVIDES}, list appended"
+            echo "${PROVIDES} provides ${TARGET}, list appended"
           )
           NOTFOUND=$(echo "$NOTFOUND" | grep -v "^${TARGET}$")
         else
@@ -226,7 +239,6 @@ searchDB() {
       echo '' 1>&2
     fi
   fi
-  [ "$C" ] && echo -n ${NORMAL}
 }
 
 graph() {
@@ -259,13 +271,7 @@ graph() {
 }
 
 # Options
-C=''
-D=''
-G=''
-N=''
-P=''
-R=''
-S=''
+C='' D='' G='' N='' P='' R='' S=''
 while getopts cdghnprst: option 2> /dev/null
 do
   case "$option" in
@@ -281,18 +287,20 @@ do
     * ) echo "Invalid options"; showhelp;;
   esac
 done
-[ "$N" ] || [ "$S" ] || [ "$D" ] || [ "$R" ] || N="true" S="true"
+[ "$C" ] || RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' NORMAL=''
+[ "$D" ] || [ "$G" ] || [ "$N" ] || [ "$R" ] || [ "$S" ] || N="true" S="true"
 shift $((OPTIND-1))
 
 # directory to scan
-[ -d "$1" ] || ! echo "${1} is not a directory" 1>&2 || showhelp
+[ "$(echo $1)" ] || ! echo "${RED}Where to search ?${NORMAL}" 1>&2 || showhelp
+[ -d "$1" ] || ! echo "${RED}'${1}' is not a directory${NORMAL}" 1>&2 || showhelp
 cd $1
 shift
 
 # main
 [ "$TCEDIR" ] || TCEDIR=$(realpath /etc/sysconfig/tcedir)
 readonly TCEDIR
-[ -d "$TCEDIR" ] || ! echo "${TCEDIR} is not a directory" 1>&2 || exit 1
+[ -d "$TCEDIR" ] || ! echo "${RED}${TCEDIR} is not a directory${NORMAL}" 1>&2 || exit 1
 copy2fs
 
 readonly KERNELVER=$(uname -r)
@@ -304,6 +312,7 @@ NOTFOUND=''
 scandir
 
 if [ "$P" ]; then
+  [ "$C" ] && echo -n ${RED}
   readonly DB="provides.db"
   getMirror
   cd "$TCEDIR"
@@ -315,11 +324,12 @@ if [ "$P" ]; then
   fi
   cd - &> /dev/null
   searchDB
+  [ "$C" ] && echo -n ${NORMAL}
 fi
 
 SCAN="${APPEND}${DETECTED}"
 
-if [ "$R" ] || [ "$S" ]; then
+if [ "$G" ] || [ "$R" ] || [ "$S" ]; then
   if [ "$(echo $SCAN)" ]; then
     TCZS=$(rscan $SCAN)
     TCZS=$(unique $TCZS)
@@ -342,17 +352,19 @@ if [ "$N" ] && [ "$(echo $NOTFOUND)" ]; then
   [ "$C" ] && echo -n ${RED} 1>&2
   echo 'Missing dependencies:' 1>&2
   echo "$NOTFOUND" 1>&2
-  [ "$R" ] || [ "$S" ] && echo '' 1>&2
+  [ "$R" ] || [ "$S" ] || [ "$G" ] || [ "$(echo $TCZS)" ] && echo '' 1>&2
   [ "$C" ] && echo -n ${NORMAL} 1>&2
 fi
 
 if [ "$R" ] && [ "$(echo $TCZS)" ]; then
   [ "$C" ] && echo -n ${GREEN}
   echo ${TCZS//$KERNELVER/KERNEL} | tr ' ' '\n' | sort | sed 's:$:.tcz:g'
-  [ "$S" ] && echo ''
+  [ "$S" ] || [ "$G" ] || [ "$(echo $TCZS)" ] && echo ''
   [ "$C" ] && echo -n ${NORMAL}
 fi
 
-[ "$S" ] && [ "$(echo $TCZS)" ] && del_redundant
+if [ "$(echo $TCZS)" ]; then
+  [ "$S" ] || [ "$G" ] && del_redundant
+fi
 
 exit 0
